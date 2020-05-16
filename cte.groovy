@@ -1,6 +1,3 @@
-@Grapes([
-    @Grab("com.h2database:h2:1.4.198")
-])
 import cte.*
 import javax.jdo.annotations.*
 import javax.jdo.Constants;
@@ -36,19 +33,6 @@ def txn(Closure block) {
     }
 }
 
-// txn { pm ->
-//     def inv = new Inventory("My Inventory")
-//     def product = new Product("Sony Discman", "A standard discman from Sony", 49.99)
-//     inv.products.add(product)
-//     pm.makePersistent(inv)
-// }
-
-// txn { pm ->
-//     def q = pm.newQuery("SELECT FROM ${Product.class.name} WHERE price < 150.00 ORDER BY price ASC")
-//     def products = q.executeList()
-//     products.each { println it.inspect() }
-// }
-
 def heads = []
 
 txn { pm ->
@@ -70,22 +54,20 @@ txn { pm ->
     }
 }
 
-def descendants(String id) {
+def descendants(def pm, String id) {
     def results = []
-    txn { pm ->
-        def parent = id
-        while (true) {
-            def q = pm.newQuery("""
+    def parent = id
+    while (true) {
+        def q = pm.newQuery("""
                 SELECT UNIQUE id INTO String FROM ${Node.class.name}
                 WHERE parent == :parent
             """.trim())
-            def result = q.execute(parent)
-            if (result == null) {
-                break;
-            } else {
-                results << result
-                parent = result
-            }
+        def result = q.execute(parent)
+        if (result == null) {
+            break;
+        } else {
+            results << result
+            parent = result
         }
     }
     return results
@@ -93,7 +75,7 @@ def descendants(String id) {
 
 heads.each {
     println it
-    descendants(it).each { println "> $it" }
+    txn { pm -> descendants(pm, it).each { println "> $it" } }
     println()
 }
 
@@ -103,20 +85,35 @@ txn { pm ->
     results.each { println it }
 }
 
-def printDescendantsData(String id) {
-    def descendants = descendants(id)
-    txn { pm ->
-        def q = pm.newQuery("""
+def naiveContainsQuery = { pm, id ->
+    def descendants = descendants(pm, id)
+    def q = pm.newQuery("""
             SELECT FROM ${Data.class.name}
             WHERE descendants.contains(this.nodeId)
             PARAMETERS java.util.List descendants
         """.trim())
-        q.execute(descendants).each { println "> $it" }
-    }
+    q.execute(descendants)
+}
+
+def cteQuery = { pm, id ->
+    def q = pm.newQuery("javax.jdo.query.SQL", """
+        WITH RECURSIVE parent(pid) AS (
+            SELECT :first AS ID
+          UNION ALL
+             SELECT ID FROM "DATA" WHERE PARENT = pid
+        )
+        SELECT * FROM DATA RIGHT JOIN parent ON DATA.ID = parent.ID
+    """.trim())
+    q.execute(id)
+}
+
+def printDescendantsData(String id, Closure query) {
+    txn { query(it, id).each { println "> $it" } }
 }
 
 heads.each {
     println it
-    printDescendantsData(it)
+    printDescendantsData(it, naiveContainsQuery)
+    printDescendantsData(it, cteQuery)
     println()
 }
