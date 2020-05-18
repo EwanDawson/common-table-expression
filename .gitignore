@@ -8,3 +8,5 @@ build
 
 classes
 enhanced
+.gradle
+*.db
